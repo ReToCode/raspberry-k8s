@@ -1,0 +1,22 @@
+apiVersion: extensions/v1beta1
+kind: DaemonSet
+metadata:
+  name: arm-exporter
+  namespace: monitoring
+  labels:
+    app: arm-exporter
+spec:
+  template:
+    metadata:
+      name: arm-exporter
+      labels:
+        app: arm-exporter
+    spec:
+      hostNetwork: true
+      containers:
+      - image: retocode/arm_exporter:v1.0.0-arm
+        name: arm-exporter
+        ports:
+        - name: http
+          containerPort: 9243
+          hostPort: 9243

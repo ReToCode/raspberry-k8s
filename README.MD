@@ -1,29 +1,47 @@
+# Kubernetes with a few addons on a raspberry PI cluster
+Inspired by:
+- https://www.hanselman.com/blog/HowToBuildAKubernetesClusterWithARMRaspberryPiThenRunNETCoreOnOpenFaas.aspx
+- https://itnext.io/building-an-arm-kubernetes-cluster-ef31032636f9
+- https://blog.alexellis.io/serverless-kubernetes-on-raspberry-pi/
+
+Sources copied/modified from: 
+- https://github.com/carlosedp/kubernetes-arm
+- https://github.com/carlosedp/prometheus-operator-ARM
+- https://github.com/carlosedp/prometheus-ARM
+
 # Setup
+![cluster](https://github.com/retocode/raspberry-k8s/raw/master/img/raspi_cluster.jpg "The raspberry pi cluster")
+
+## Parts
+- 5x Raspberry PI B+
+- 5x Samsung Evo+ 32GB, Class 10 microSD
+- Anker PowerPort 6 (12A, 60W)
+- Renkforce 8-Port Switch (USB powered)
+- Ethernet and Micro-USB-Cables
+- 5 Layer Raspberry PI Stack Case
 
 ## Network layout
 ```
-Network: 192.168.1.0/24
-Gateway: 192.168.1.1
+Network: 192.168.184.0/24
+Gateway: 192.168.184.1
 
-DNS: 192.168.1.1 (running dnsmasq on DD-WRT Router)
+DNS: 192.168.184.1
 
-Router DHCP range: 192.168.1.101 - 192.168.1.200
-Reserved: 192.168.1.2 - 192.168.1.15
-
-* 192.168.1.1 - Router
-* 192.168.1.3 - Managed Switch
-* 192.168.1.4 - RPi3 (media server)
+* 192.168.184.1 - Router
+* 192.168.184.100-249 DHCP Range
 
 Kubernetes Nodes:
-    - Master1: 192.168.1.50
-    - Node1: 192.168.1.55
-    - Node2: 192.168.1.56
+    - k8s-master1: 192.168.184.20
+    - k8s-node1: 192.168.184.21 (also NFS server)
+    - k8s-node2: 192.168.184.22
+    - k8s-node3: 192.168.184.23
+    - k8s-node4: 192.168.184.24
 
-MetalLB CIDR: 192.168.1.16/28
-    - 192.168.1.17 - 192.168.1.30
+MetalLB CIDR: 192.168.184.49/28
+    - 192.168.184.49 - 192.168.184.62
 
-Traefik Internal Ingress IP: 192.168.1.20
-Traefik External Ingress IP: 192.168.1.21
+Traefik Internal Ingress IP: 192.168.184.xx
+Traefik External Ingress IP: 192.168.184.xx
 ```
 
 # Installing kube
@@ -41,7 +59,7 @@ sudo rasbpi-config
 # Configure the static ip
 sudo vi /etc/dhcpcd.conf
 profile static_eth0
-static ip_address=192.168.184.21/24
+static ip_address=192.168.184.xx/24
 static routers=192.168.184.1
 
 # Install docker
@@ -102,8 +120,7 @@ kubeadm join 192.168.184.20:6443 --token xxx --discovery-token-ca-cert-hash sha2
 Installing metal:
 ```
 kubectl create -f 1-metal/metal-configmap.yaml
-
-kubectl apply -f https://raw.githubusercontent.com/google/metallb/v0.6.2/manifests/metallb.yaml
+kubectl apply -f https://raw.githubusercontent.com/google/metallb/v0.7.3/manifests/metallb.yaml
 ```
 
 ## 2) Traefik
@@ -114,7 +131,8 @@ kubectl apply -f https://raw.githubusercontent.com/containous/traefik/master/exa
 # Traefik using deployment
 kubectl apply -f https://raw.githubusercontent.com/containous/traefik/master/examples/k8s/traefik-deployment.yaml
 
-kubectl --n=kube-system get services # Get NodePort
+# Get NodePort
+kubectl -n=kube-system get services
 curl <NODEIP>:<NODEPORT>
 ```
 
@@ -137,9 +155,9 @@ sudo exportfs -a
 
 ### Setup NFS auto provisioning on kubernetes
 ```
-kubectl apply -f 3-nfs/nfs-provisioner-rbac.yaml
-kubectl apply -f 3-nfs/nfs-provisioner.yaml
-kubectl apply -f 3-nfs/nfs-storageclass.yaml
+kubectl apply -f 2-nfs/nfs-provisioner-rbac.yaml
+kubectl apply -f 2-nfs/nfs-provisioner.yaml
+kubectl apply -f 2-nfs/nfs-storageclass.yaml
 
 kubectl get storageclass
 # If it's not the default storage class, change it
@@ -149,14 +167,46 @@ kubectl patch storageclass nfs-node1-sdcard -p '{"metadata":{"annotations": {"st
 
 ## 4) Kubernetes dashboard
 ```
-kubectl apply -f 4-dashboard/dashboard-rbac.yaml
+kubectl apply -f 3-dashboard/dashboard-rbac.yaml
 
 kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/v1.10.1/src/deploy/alternative/kubernetes-dashboard-arm.yaml
 ```
 
 ## 5) Monitoring (Prometheus & Grafana)
 ```
+# Build docker images
+4-monitoring/build_images.sh
+
+# Expose necessary services on all masters & workers
+4-monitoring/expose_services.sh
+
+# Create services with open ports
+kubectl apply -f 4-monitoring/k8s
+
+# Deploy prometheus operator
+export NAMESPACE='monitoring'
+kubectl create namespace "$NAMESPACE"
+kubectl --namespace="$NAMESPACE" apply -f 4-monitoring/prometheus-operator
+
+# Wait for deployment of CRDs
+until kubectl --namespace="$NAMESPACE" get alertmanagers.monitoring.coreos.com > /dev/null 2>&1; do sleep 1; printf "."; done
+
+# Deploy exporters
+kubectl --namespace="$NAMESPACE" apply -f 4-monitoring/node-exporter
+kubectl --namespace="$NAMESPACE" apply -f 4-monitoring/arm-exporter
+
+# Kube state metrics
+kubectl --namespace="$NAMESPACE" apply -f 4-monitoring/kube-state-metrics
+kubectl --namespace="$NAMESPACE" apply -f 4-monitoring/grafana
+
+# Prometheus
+find 4-monitoring/prometheus -type f ! -name prometheus-k8s-roles.yaml ! -name prometheus-k8s-role-bindings.yaml -exec kubectl --namespace "$NAMESPACE" apply -f {} \;
+
+kubectl apply -f 4-monitoring/prometheus/prometheus-k8s-roles.yaml
+kubectl apply -f 4-monitoring/prometheus/prometheus-k8s-role-bindings.yaml
+
+# Alertmanager
+kubectl --namespace="$NAMESPACE" apply -f 4-monitoring/alertmanager
 
 ```
-
 
