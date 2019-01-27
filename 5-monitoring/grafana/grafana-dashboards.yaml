@@ -9,4 +9,4 @@ data:
       folder: ''
       type: file
       options:
-        folder: /grafana-dashboard-definitions/0
+        folder: /usr/share/grafana/grafana-dashboard-definitions/0

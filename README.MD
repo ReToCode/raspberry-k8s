@@ -38,10 +38,9 @@ Kubernetes Nodes:
     - k8s-node4: 192.168.184.24
 
 MetalLB CIDR: 192.168.184.49/28
-    - 192.168.184.49 - 192.168.184.62
+    - 192.168.184.48 - 192.168.184.62
 
-Traefik Internal Ingress IP: 192.168.184.xx
-Traefik External Ingress IP: 192.168.184.xx
+Traefik Internal Ingress IP: 192.168.184.48
 ```
 
 # Installing kube
@@ -116,24 +115,19 @@ kubeadm join 192.168.184.20:6443 --token xxx --discovery-token-ca-cert-hash sha2
 
 # Installing plugins
 
-## 1) Bare metal LoadBalancer: Metal
+## 1) Load balancers with metal
 Installing metal:
 ```
-kubectl create -f 1-metal/metal-configmap.yaml
-kubectl apply -f https://raw.githubusercontent.com/google/metallb/v0.7.3/manifests/metallb.yaml
+kubectl apply -f 1-metal
 ```
 
 ## 2) Traefik
 ```
 # rbac
-kubectl apply -f https://raw.githubusercontent.com/containous/traefik/master/examples/k8s/traefik-rbac.yaml
+kubectl apply -f 2-traefik
 
-# Traefik using deployment
-kubectl apply -f https://raw.githubusercontent.com/containous/traefik/master/examples/k8s/traefik-deployment.yaml
-
-# Get NodePort
+# Get external IP from metal LB
 kubectl -n=kube-system get services
-curl <NODEIP>:<NODEPORT>
 ```
 
 ## 3) NFS Storage
@@ -155,9 +149,9 @@ sudo exportfs -a
 
 ### Setup NFS auto provisioning on kubernetes
 ```
-kubectl apply -f 2-nfs/nfs-provisioner-rbac.yaml
-kubectl apply -f 2-nfs/nfs-provisioner.yaml
-kubectl apply -f 2-nfs/nfs-storageclass.yaml
+kubectl apply -f 3-nfs/nfs-provisioner-rbac.yaml
+kubectl apply -f 3-nfs/nfs-provisioner.yaml
+kubectl apply -f 3-nfs/nfs-storageclass.yaml
 
 kubectl get storageclass
 # If it's not the default storage class, change it
@@ -167,46 +161,44 @@ kubectl patch storageclass nfs-node1-sdcard -p '{"metadata":{"annotations": {"st
 
 ## 4) Kubernetes dashboard
 ```
-kubectl apply -f 3-dashboard/dashboard-rbac.yaml
-
-kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/v1.10.1/src/deploy/alternative/kubernetes-dashboard-arm.yaml
+kubectl apply -f 4-dashboard
 ```
 
 ## 5) Monitoring (Prometheus & Grafana)
 ```
 # Build docker images
-4-monitoring/build_images.sh
+5-monitoring/build_images.sh
 
 # Expose necessary services on all masters & workers
-4-monitoring/expose_services.sh
+5-monitoring/expose_services.sh
 
 # Create services with open ports
-kubectl apply -f 4-monitoring/k8s
+kubectl apply -f 5-monitoring/k8s
 
 # Deploy prometheus operator
 export NAMESPACE='monitoring'
 kubectl create namespace "$NAMESPACE"
-kubectl --namespace="$NAMESPACE" apply -f 4-monitoring/prometheus-operator
+kubectl --namespace="$NAMESPACE" apply -f 5-monitoring/prometheus-operator
 
 # Wait for deployment of CRDs
 until kubectl --namespace="$NAMESPACE" get alertmanagers.monitoring.coreos.com > /dev/null 2>&1; do sleep 1; printf "."; done
 
 # Deploy exporters
-kubectl --namespace="$NAMESPACE" apply -f 4-monitoring/node-exporter
-kubectl --namespace="$NAMESPACE" apply -f 4-monitoring/arm-exporter
+kubectl --namespace="$NAMESPACE" apply -f 5-monitoring/node-exporter
+kubectl --namespace="$NAMESPACE" apply -f 5-monitoring/arm-exporter
 
 # Kube state metrics
-kubectl --namespace="$NAMESPACE" apply -f 4-monitoring/kube-state-metrics
-kubectl --namespace="$NAMESPACE" apply -f 4-monitoring/grafana
+kubectl --namespace="$NAMESPACE" apply -f 5-monitoring/kube-state-metrics
+kubectl --namespace="$NAMESPACE" apply -f 5-monitoring/grafana
 
 # Prometheus
-find 4-monitoring/prometheus -type f ! -name prometheus-k8s-roles.yaml ! -name prometheus-k8s-role-bindings.yaml -exec kubectl --namespace "$NAMESPACE" apply -f {} \;
+find 5-monitoring/prometheus -type f ! -name prometheus-k8s-roles.yaml ! -name prometheus-k8s-role-bindings.yaml -exec kubectl --namespace "$NAMESPACE" apply -f {} \;
 
-kubectl apply -f 4-monitoring/prometheus/prometheus-k8s-roles.yaml
-kubectl apply -f 4-monitoring/prometheus/prometheus-k8s-role-bindings.yaml
+kubectl apply -f 5-monitoring/prometheus/prometheus-k8s-roles.yaml
+kubectl apply -f 5-monitoring/prometheus/prometheus-k8s-role-bindings.yaml
 
 # Alertmanager
-kubectl --namespace="$NAMESPACE" apply -f 4-monitoring/alertmanager
+kubectl --namespace="$NAMESPACE" apply -f 5-monitoring/alertmanager
 
 ```
 
